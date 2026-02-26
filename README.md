@@ -1,3 +1,11 @@
+---
+title: MarsAI Backend
+emoji: 🚀
+colorFrom: red
+colorTo: blue
+sdk: docker
+pinned: false
+---
 # MarsAI Backend
 
 FastAPI backend with 4 ML models for onboard science selection.
