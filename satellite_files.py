@@ -2,6 +2,8 @@ import random
 import uuid
 from typing import List, Dict, Any
 
+from regex import template
+
 FILE_TEMPLATES = [
     {
         "type": "IMG",
@@ -15,7 +17,7 @@ FILE_TEMPLATES = [
             "Panoramic horizon scan, no anomalies detected, standard sol documentation",
         ],
         "size_range": (8, 45),
-        "sensor_base": {"temperature": -23.0, "pressure": 729.0, "chemical_index": 0.15},
+        "sensor_base": {"temperature": -23.0, "pressure": 729.0, "chemical_index": 0.08},
     },
     {
         "type": "CHEM",
@@ -93,7 +95,8 @@ def generate_file() -> Dict[str, Any]:
     }
 
     # Occasionally inject anomaly
-    if random.random() < 0.08:
+    # Only inject anomaly rarely and only for specific file types
+    if random.random() < 0.08 and template["type"] in ["CHEM", "ATM", "SEISM", "PIXL"]:
         sensor_data["chemical_index"] = round(random.uniform(0.82, 1.0), 3)
         sensor_data["temperature"] = round(base["temperature"] + random.gauss(0, 20), 2)
 
