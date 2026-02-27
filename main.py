@@ -201,3 +201,29 @@ def get_mars_delay():
 def set_mars_delay(body: MarsDelayUpdate):
     channel.set_mars_delay(body.minutes)
     return {"mars_delay_minutes": channel.mars_delay_minutes}
+
+
+class AnalyzeRequest(BaseModel):
+    file: Dict[str, Any]
+    mission: str = "mars"
+
+@app.post("/analyze")
+def analyze_file(body: AnalyzeRequest):
+    """Analyze a single file through the full AI pipeline."""
+    if engine is None:
+        return {"error": "Models still loading, please wait"}
+    
+    file = body.file
+    
+    # Fill missing sensor data with defaults
+    if "sensor_data" not in file:
+        file["sensor_data"] = {
+            "temperature": -25.0,
+            "pressure": 729.0,
+            "chemical_index": 0.15,
+            "radiation_level": 0.3,
+            "humidity": 0.01,
+        }
+    
+    result = engine.decide(file, channel.get_state())
+    return result
