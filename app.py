@@ -1,1 +1,1 @@
-from main import app
+allow_origins=["*"],
