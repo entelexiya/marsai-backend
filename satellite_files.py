@@ -2,8 +2,6 @@ import random
 import uuid
 from typing import List, Dict, Any
 
-from regex import template
-
 FILE_TEMPLATES = [
     {
         "type": "IMG",
@@ -31,7 +29,7 @@ FILE_TEMPLATES = [
             "Organic carbon detection attempt — inconclusive signal, requires follow-up with SAM",
         ],
         "size_range": (2, 12),
-        "sensor_base": {"temperature": -31.0, "pressure": 727.0, "chemical_index": 0.5},
+        "sensor_base": {"temperature": -31.0, "pressure": 727.0, "chemical_index": 0.18},
     },
     {
         "type": "ATM",
@@ -45,7 +43,7 @@ FILE_TEMPLATES = [
             "Routine morning atmospheric profile: inversion layer at 800m altitude",
         ],
         "size_range": (1, 8),
-        "sensor_base": {"temperature": -45.0, "pressure": 712.0, "chemical_index": 0.3},
+        "sensor_base": {"temperature": -45.0, "pressure": 712.0, "chemical_index": 0.12},
     },
     {
         "type": "SEISM",
@@ -57,7 +55,7 @@ FILE_TEMPLATES = [
             "Background seismic monitoring: nominal levels, no events above M1.0 this period",
         ],
         "size_range": (3, 20),
-        "sensor_base": {"temperature": -30.0, "pressure": 731.0, "chemical_index": 0.1},
+        "sensor_base": {"temperature": -30.0, "pressure": 731.0, "chemical_index": 0.10},
     },
     {
         "type": "PIXL",
@@ -69,7 +67,7 @@ FILE_TEMPLATES = [
             "Carbonate mineral vein: siderite composition, formed in ancient CO2-rich water",
         ],
         "size_range": (5, 25),
-        "sensor_base": {"temperature": -28.0, "pressure": 728.0, "chemical_index": 0.6},
+        "sensor_base": {"temperature": -28.0, "pressure": 728.0, "chemical_index": 0.20},
     },
 ]
 
@@ -84,23 +82,23 @@ def generate_file() -> Dict[str, Any]:
     sol = _sol_counter[0]
     _file_counter[0] += 1
 
-    # Add noise to sensor data
     base = template["sensor_base"]
     sensor_data = {
         "temperature": round(base["temperature"] + random.gauss(0, 5), 2),
         "pressure": round(base["pressure"] + random.gauss(0, 8), 2),
-        "chemical_index": round(min(1.0, max(0.0, base["chemical_index"] + random.gauss(0, 0.15))), 3),
-        "radiation_level": round(random.uniform(0.1, 0.9), 3),
-        "humidity": round(random.uniform(0.0, 0.05), 4),
+        "chemical_index": round(min(1.0, max(0.0, base["chemical_index"] + random.gauss(0, 0.05))), 3),
+        "radiation_level": round(random.uniform(0.1, 0.5), 3),
+        "humidity": round(random.uniform(0.0, 0.02), 4),
     }
 
-    # Occasionally inject anomaly
-    # Only inject anomaly rarely and only for specific file types
+    # Inject real anomaly only 8% of the time, only for science instruments
     if random.random() < 0.08 and template["type"] in ["CHEM", "ATM", "SEISM", "PIXL"]:
-        sensor_data["chemical_index"] = round(random.uniform(0.82, 1.0), 3)
-        sensor_data["temperature"] = round(base["temperature"] + random.gauss(0, 20), 2)
+        sensor_data["chemical_index"] = round(random.uniform(0.85, 1.0), 3)
+        sensor_data["temperature"] = round(base["temperature"] + random.gauss(0, 25), 2)
+        sensor_data["pressure"] = round(base["pressure"] + random.gauss(0, 30), 2)
 
-    name = f"{template['name_prefix']}_{sol}_{str(_file_counter[0]).zfill(4)}.{'jpg' if template['type'] == 'IMG' else 'dat' if template['type'] in ['ATM', 'SEISM'] else 'csv'}"
+    ext = "jpg" if template["type"] == "IMG" else "dat" if template["type"] in ["ATM", "SEISM"] else "csv"
+    name = f"{template['name_prefix']}_{sol}_{str(_file_counter[0]).zfill(4)}.{ext}"
 
     return {
         "id": str(uuid.uuid4())[:8],
