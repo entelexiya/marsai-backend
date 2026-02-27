@@ -258,14 +258,14 @@ class DecisionEngine:
         reasons.append(f"🎯 RandomForest → {status_label} (confidence: {max(rf_proba):.0%})")
 
         return {
-            "status": status,
-            "priority": priority,
-            "ai_score": round((semantic_score + anomaly_score + (rf_proba[2] if len(rf_proba) > 2 else 0)) / 3, 3),
-            "is_anomaly": bool(is_anomaly),
-            "anomaly_score": anomaly_score,
-            "semantic_score": semantic_score,
-            "predicted_bandwidth": predicted_bw,
-            "channel_degrading": bool(channel_degrading),
-            "decision_reason": " | ".join(reasons),
-            "rf_confidence": round(float(max(rf_proba)), 3),
-        }
+    "status": status,
+    "priority": int(priority),
+    "ai_score": float(round((semantic_score + anomaly_score + (rf_proba[2] if len(rf_proba) > 2 else 0)) / 3, 3)),
+    "is_anomaly": bool(is_anomaly),
+    "anomaly_score": float(anomaly_score),
+    "semantic_score": float(semantic_score),
+    "predicted_bandwidth": float(predicted_bw),
+    "channel_degrading": bool(channel_degrading),
+    "decision_reason": " | ".join(reasons),
+    "rf_confidence": float(round(float(max(rf_proba)), 3)),
+}
