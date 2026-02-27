@@ -23,10 +23,10 @@ class ChannelSimulator:
 
         # Slow orbital drift — bandwidth changes over hours
         self._drift += random.gauss(0, 0.05)
-        self._drift = max(-2.0, min(2.0, self._drift))
+        self._drift = max(-0.5, min(0.5, self._drift))
 
         # Occasional sudden drops (solar interference, antenna issues)
-        sudden_drop = random.random() < 0.07
+        sudden_drop = random.random() < 0.03
         if sudden_drop:
             self.bandwidth_mbps = max(0.1, self.bandwidth_mbps * random.uniform(0.2, 0.5))
         else:
