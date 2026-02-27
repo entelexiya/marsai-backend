@@ -128,7 +128,7 @@ class DecisionEngine:
         ]]
         score = self.isolation_forest.score_samples(features)[0]
         # score: more negative = more anomalous
-        is_anomaly = score < -0.15
+        is_anomaly = score < -0.25
         anomaly_strength = max(0.0, min(1.0, (-score - 0.05) / 0.3))
         return is_anomaly, round(anomaly_strength, 3)
 

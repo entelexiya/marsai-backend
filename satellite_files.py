@@ -93,7 +93,7 @@ def generate_file() -> Dict[str, Any]:
     }
 
     # Occasionally inject anomaly
-    if random.random() < 0.2:
+    if random.random() < 0.08:
         sensor_data["chemical_index"] = round(random.uniform(0.82, 1.0), 3)
         sensor_data["temperature"] = round(base["temperature"] + random.gauss(0, 20), 2)
 
