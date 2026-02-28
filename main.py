@@ -108,10 +108,20 @@ def tick():
     available_mb = channel_state["bandwidth_mbps"] * 3 * 0.125 * 8  # Mbps * seconds * conversion
     sent_this_tick = []
 
+    # Transmission policy depends on mission:
+    # Mars/DeepSpace: only critical/sending/queued (every byte precious)
+    # Lunar/Satellite: also pending files (good bandwidth, generous window)
+    if current_mission in ["satellite", "lunar"]:
+        transmit_statuses = ["critical", "sending", "queued", "pending"]
+        size_limit_multiplier = 5  # can send bigger files
+    else:
+        transmit_statuses = ["critical", "sending", "queued"]
+        size_limit_multiplier = 2
+
     for f in file_queue[:]:
         if available_mb <= 0:
             break
-        if f["status"] in ["critical", "sending", "queued"] and f["size_mb"] <= available_mb * 2:
+        if f["status"] in transmit_statuses and f["size_mb"] <= available_mb * size_limit_multiplier:
             available_mb -= f["size_mb"]
             f["status"] = "sent"
             stats["total_transmitted_mb"] += f["size_mb"]
@@ -123,9 +133,12 @@ def tick():
                 sent_files.pop(0)
 
     # Drop low priority if queue too large
-    if len(file_queue) > 20:
+    # Mars/DeepSpace: aggressive dropping, Lunar/Satellite: more lenient
+    max_queue = 12 if current_mission in ["mars", "deepspace"] else 25
+    if len(file_queue) > max_queue:
         to_drop = [f for f in file_queue if f["status"] == "pending"]
-        for f in to_drop[:3]:
+        drop_count = 5 if current_mission in ["mars", "deepspace"] else 2
+        for f in to_drop[:drop_count]:
             stats["total_dropped_mb"] += f["size_mb"]
             file_queue.remove(f)
 
