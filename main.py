@@ -1,29 +1,31 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 import threading
+import random
 
-from satellite_files import generate_batch, generate_file, advance_sol
 from channel_simulator import ChannelSimulator
+from satellite_files import generate_file, generate_batch
 from decision_engine import DecisionEngine
+from mission_configs import MISSION_CONFIGS
 
-app = FastAPI(title="MarsAI Backend", version="1.0.0")
+app = FastAPI(title="MarsAI Backend")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Global state ──────────────────────────────────────────────
-channel = ChannelSimulator()
-engine = None  # Lazy init (model loading takes ~10s)
-engine_lock = threading.Lock()
-
-file_queue: List[Dict] = []
-sent_files: List[Dict] = []
+# Global state
+engine: Optional[DecisionEngine] = None
+channel = ChannelSimulator("mars")
+current_mission = "mars"
+file_queue = []
+sent_files = []
 stats = {
     "total_collected_mb": 0.0,
     "total_transmitted_mb": 0.0,
@@ -35,48 +37,26 @@ stats = {
     "ticks": 0,
 }
 
-def get_engine() -> DecisionEngine:
+def load_models():
     global engine
-    with engine_lock:
-        if engine is None:
-            engine = DecisionEngine()
-    return engine
-
-
-def _init_queue():
-    global file_queue, stats
-    files = generate_batch(8)
-    channel_state = channel.get_state()
-    eng = get_engine()
-
-    for f in files:
-        result = eng.decide(f, channel_state)
-        f.update(result)
+    engine = DecisionEngine()
+    # Pre-fill queue
+    global file_queue
+    batch = generate_batch(8, current_mission)
+    for f in batch:
+        f["mission"] = current_mission
         stats["total_collected_mb"] += f["size_mb"]
+    file_queue = batch
 
-    file_queue = files
-    stats["files_pending"] = len([f for f in file_queue if f["status"] == "pending"])
+threading.Thread(target=load_models, daemon=True).start()
 
-
-# ── Startup ───────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    # Load models in background thread so server starts fast
-    def load():
-        get_engine()
-        _init_queue()
-        print("[API] Ready ✓")
-    t = threading.Thread(target=load, daemon=True)
-    t.start()
-
-
-# ── Endpoints ─────────────────────────────────────────────────
 
 @app.get("/status")
 def get_status():
     return {
         "status": "online",
         "models_ready": engine is not None,
+        "mission": current_mission,
         "channel": channel.get_state(),
         "stats": stats,
         "queue_size": len(file_queue),
@@ -87,96 +67,97 @@ def get_status():
 @app.get("/files")
 def get_files():
     return {
-        "queue": file_queue,
-        "sent": sent_files[-20:],  # last 20 sent
-        "channel": channel.get_state(),
+        "queue": file_queue[-20:],
+        "sent": sent_files[-10:],
     }
-
-
-@app.get("/channel/history")
-def get_channel_history():
-    return {"history": channel.get_history()}
 
 
 @app.post("/tick")
 def tick():
-    """
-    One simulation cycle:
-    1. Update channel
-    2. Add new file
-    3. Process queue — send critical/high-value files
-    4. Return updated state
-    """
     global file_queue, sent_files, stats
 
     if engine is None:
-        return {"status": "loading", "message": "AI models still loading, please wait..."}
+        return {"status": "loading", "message": "AI models still initializing..."}
 
-    # Update channel
-    channel_state = channel.update()
     stats["ticks"] += 1
+    channel_state = channel.update()
+    cfg = MISSION_CONFIGS[current_mission]
+    bw_min, bw_max = cfg["bandwidth_range"]
 
-    # Add new file every 2 ticks
+    # Add new files every 2 ticks
     if stats["ticks"] % 2 == 0:
-        new_file = generate_file()
-        result = engine.decide(new_file, channel_state)
-        new_file.update(result)
+        new_file = generate_file(current_mission)
+        new_file["mission"] = current_mission
         stats["total_collected_mb"] += new_file["size_mb"]
-        if new_file["is_anomaly"]:
-            stats["anomalies_detected"] += 1
         file_queue.append(new_file)
 
-    # Re-evaluate queue with updated channel
+    # Run AI decision on all queued files
     for f in file_queue:
-        if f["status"] not in ("critical", "sending"):
+        if f["status"] == "pending":
+            f["mission"] = current_mission
             result = engine.decide(f, channel_state)
             f.update(result)
+            if result["is_anomaly"]:
+                stats["anomalies_detected"] += 1
 
-    # Transmit files based on available bandwidth
-    available_mb = channel_state["bandwidth_mbps"] * 5  # per tick budget
-    transmitted_this_tick = 0.0
-    newly_sent = []
+    # Sort: critical first, then by ai_score
+    status_order = {"critical": 0, "sending": 1, "queued": 2, "pending": 3}
+    file_queue.sort(key=lambda x: (status_order.get(x["status"], 4), -x.get("ai_score", 0)))
 
-    # Priority order: critical → sending → queued
-    priority_order = ["critical", "sending", "queued"]
-    for priority_status in priority_order:
-        for f in list(file_queue):
-            if f["status"] == priority_status:
-                if transmitted_this_tick + f["size_mb"] <= available_mb:
-                    f["status"] = "sent"
-                    transmitted_this_tick += f["size_mb"]
-                    stats["total_transmitted_mb"] += f["size_mb"]
-                    stats["files_sent"] += 1
-                    newly_sent.append(f)
-                    file_queue.remove(f)
+    # Available bandwidth per tick (3 sec)
+    available_mb = channel_state["bandwidth_mbps"] * 3 * 0.125 * 8  # Mbps * seconds * conversion
+    sent_this_tick = []
 
-    sent_files.extend(newly_sent)
+    for f in file_queue[:]:
+        if available_mb <= 0:
+            break
+        if f["status"] in ["critical", "sending", "queued"] and f["size_mb"] <= available_mb * 2:
+            available_mb -= f["size_mb"]
+            f["status"] = "sent"
+            stats["total_transmitted_mb"] += f["size_mb"]
+            stats["files_sent"] += 1
+            sent_this_tick.append(f)
+            file_queue.remove(f)
+            sent_files.append(f)
+            if len(sent_files) > 50:
+                sent_files.pop(0)
 
-    # Drop very low priority files if queue too large
-    if len(file_queue) > 15:
-        to_drop = [f for f in file_queue if f["status"] == "pending" and f["priority"] <= 1]
+    # Drop low priority if queue too large
+    if len(file_queue) > 20:
+        to_drop = [f for f in file_queue if f["status"] == "pending"]
         for f in to_drop[:3]:
             stats["total_dropped_mb"] += f["size_mb"]
-            stats["bandwidth_saved_mb"] += f["size_mb"]
             file_queue.remove(f)
 
     stats["files_pending"] = len(file_queue)
+    predicted_bw = engine.predict_channel(bw_min, bw_max)
 
     return {
+        "status": "ok",
+        "mission": current_mission,
         "channel": channel_state,
-        "queue": file_queue,
-        "sent_this_tick": newly_sent,
+        "queue": file_queue[-20:],
+        "sent_this_tick": sent_this_tick,
         "stats": stats,
-        "predicted_bandwidth": engine.predict_channel(),
+        "predicted_bandwidth": float(predicted_bw),
     }
 
 
-@app.post("/reset")
-def reset():
-    global file_queue, sent_files, stats
+class MissionSwitch(BaseModel):
+    mission: str
+
+@app.post("/mission")
+def switch_mission(body: MissionSwitch):
+    global current_mission, file_queue, sent_files, stats
+    mission = body.mission
+    if mission not in MISSION_CONFIGS:
+        return {"error": f"Unknown mission: {mission}"}
+
+    current_mission = mission
+    channel.set_mission(mission)
     file_queue = []
     sent_files = []
-    stats.update({
+    stats = {
         "total_collected_mb": 0.0,
         "total_transmitted_mb": 0.0,
         "total_dropped_mb": 0.0,
@@ -185,22 +166,38 @@ def reset():
         "anomalies_detected": 0,
         "bandwidth_saved_mb": 0.0,
         "ticks": 0,
-    })
-    _init_queue()
-    return {"status": "reset", "message": "Simulation restarted"}
+    }
+
+    batch = generate_batch(8, mission)
+    for f in batch:
+        f["mission"] = mission
+        stats["total_collected_mb"] += f["size_mb"]
+    file_queue = batch
+
+    return {"status": "ok", "mission": mission, "channel": channel.get_state()}
 
 
-class MarsDelayUpdate(BaseModel):
-    minutes: float
-
-@app.get("/mars-delay")
-def get_mars_delay():
-    return {"mars_delay_minutes": channel.mars_delay_minutes}
-
-@app.post("/mars-delay")
-def set_mars_delay(body: MarsDelayUpdate):
-    channel.set_mars_delay(body.minutes)
-    return {"mars_delay_minutes": channel.mars_delay_minutes}
+@app.post("/reset")
+def reset():
+    global file_queue, sent_files, stats
+    file_queue = []
+    sent_files = []
+    stats = {
+        "total_collected_mb": 0.0,
+        "total_transmitted_mb": 0.0,
+        "total_dropped_mb": 0.0,
+        "files_sent": 0,
+        "files_pending": 0,
+        "anomalies_detected": 0,
+        "bandwidth_saved_mb": 0.0,
+        "ticks": 0,
+    }
+    batch = generate_batch(8, current_mission)
+    for f in batch:
+        f["mission"] = current_mission
+        stats["total_collected_mb"] += f["size_mb"]
+    file_queue = batch
+    return {"status": "reset", "mission": current_mission}
 
 
 class AnalyzeRequest(BaseModel):
@@ -209,13 +206,12 @@ class AnalyzeRequest(BaseModel):
 
 @app.post("/analyze")
 def analyze_file(body: AnalyzeRequest):
-    """Analyze a single file through the full AI pipeline."""
     if engine is None:
         return {"error": "Models still loading, please wait"}
-    
+
     file = body.file
-    
-    # Fill missing sensor data with defaults
+    file["mission"] = body.mission
+
     if "sensor_data" not in file:
         file["sensor_data"] = {
             "temperature": -25.0,
@@ -224,6 +220,16 @@ def analyze_file(body: AnalyzeRequest):
             "radiation_level": 0.3,
             "humidity": 0.01,
         }
-    
+
     result = engine.decide(file, channel.get_state())
     return result
+
+
+@app.get("/channel/history")
+def channel_history():
+    return {"history": channel.get_history()}
+
+
+@app.get("/missions")
+def get_missions():
+    return {"missions": list(MISSION_CONFIGS.keys()), "current": current_mission}
