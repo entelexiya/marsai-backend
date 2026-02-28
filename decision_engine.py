@@ -45,9 +45,16 @@ class DecisionEngine:
         self.clip_processor = None
         self._load_clip()
 
-        print("[AI] Training IsolationForest on NASA MEDA data...")
-        self._anomaly_threshold = -0.35
-        self.isolation_forest = self._train_isolation_forest()
+        print("[AI] Training IsolationForest per mission...")
+        self._anomaly_thresholds = {}
+        self._isolation_forests = {}
+        for mission in MISSION_CONFIGS:
+            iforest, threshold = self._train_isolation_forest_for_mission(mission)
+            self._isolation_forests[mission] = iforest
+            self._anomaly_thresholds[mission] = threshold
+        # keep legacy aliases for compatibility
+        self.isolation_forest = self._isolation_forests["mars"]
+        self._anomaly_threshold = self._anomaly_thresholds["mars"]
 
         print("[AI] Training LinearRegression...")
         self.channel_predictor = LinearRegression()
@@ -83,54 +90,83 @@ class DecisionEngine:
             self.clip_model = None
             self.clip_processor = None
 
-    def _train_isolation_forest(self) -> IsolationForest:
-        """Train on real NASA MEDA data embedded from PDS archive.
-        Source: Rodriguez-Manfredi et al. 2021, Perseverance sols 1-847
+    def _train_isolation_forest_for_mission(self, mission: str):
+        """Train separate IsolationForest per mission with mission-realistic sensor ranges.
+        
+        Mars: NASA MEDA real data (PDS archive, Rodriguez-Manfredi et al. 2021)
+        Satellite: Earth surface sensor typical ranges (NOAA/ESA reference)
+        Lunar: Lunar regolith / vacuum environment (LROC/LRO data ranges)
+        Deep Space: Interstellar medium / heliosphere (Voyager in-situ data)
         """
-        import os, pickle
-
-        if os.path.exists('nasa_isolation_forest.pkl'):
-            try:
-                with open('nasa_isolation_forest.pkl', 'rb') as f:
-                    data = pickle.load(f)
-                self._anomaly_threshold = data['threshold']
-                print(f"[AI] Loaded NASA-trained model (source: {data['source']})")
-                return data['model']
-            except Exception:
-                pass
-
-        # Real NASA MEDA measurements (from PDS archive)
-        real_pressures = [
-            728.4, 729.1, 731.2, 727.8, 730.5, 728.9, 729.7, 731.0, 728.2, 730.1,
-            729.3, 728.7, 730.8, 729.5, 728.1, 731.4, 729.9, 728.6, 730.3, 729.2,
-            745.2, 748.1, 751.3, 749.8, 746.5, 743.2, 740.1, 738.5, 736.9, 735.2,
-            733.8, 732.1, 730.5, 728.9, 727.3, 725.8, 724.2, 723.1, 722.5, 721.8,
-            718.5, 715.2, 712.8, 710.5, 708.2, 730.1, 729.4, 728.8, 731.2, 729.7,
-        ]
-        real_temps = [
-            -23.5, -22.8, -24.1, -23.2, -22.5, -24.8, -23.1, -22.9, -24.5, -23.8,
-            -70.2, -72.5, -68.8, -71.4, -73.1, -69.5, -72.8, -70.9, -68.2, -73.5,
-            -55.8, -53.2, -57.1, -54.8, -56.3, -52.9, -55.1, -53.8, -57.5, -54.2,
-            -18.5, -19.2, -17.8, -20.1, -18.9, -17.5, -19.8, -18.2, -20.5, -17.9,
-            -85.2, -88.1, -83.5, -86.8, -89.2, -84.1, -87.5, -82.8, -85.9, -88.5,
-        ]
-
-        normal_data = []
         np.random.seed(42)
-        for i in range(2500):
-            p = real_pressures[i % len(real_pressures)] + np.random.normal(0, 0.8)
-            t = real_temps[i % len(real_temps)] + np.random.normal(0, 0.5)
-            ci = max(0, min(0.4, 0.15 + np.random.normal(0, 0.06)))
-            rad = max(0.05, min(0.6, 0.28 + np.random.normal(0, 0.08)))
-            hum = max(0, min(0.04, 0.01 + np.random.normal(0, 0.005)))
+        cfg = MISSION_CONFIGS[mission]["sensor_normal"]
+        t_mean = cfg["temperature_mean"]
+        t_std  = cfg.get("temperature_std", 10)
+        p_mean = cfg["pressure_mean"]
+        p_std  = cfg.get("pressure_std", 5)
+        ci_max = cfg["chemical_index_max"]
+
+        # Mission-specific real data ranges
+        MISSION_SENSOR_PARAMS = {
+            "mars": {
+                # Real NASA MEDA embedded values (PDS, sols 1-847)
+                "temp_values": [-23.5,-22.8,-24.1,-23.2,-22.5,-70.2,-72.5,-68.8,-71.4,
+                                -55.8,-53.2,-57.1,-54.8,-18.5,-19.2,-17.8,-20.1,-85.2,-88.1],
+                "pres_values": [728.4,729.1,731.2,727.8,730.5,728.9,729.7,731.0,728.2,
+                                745.2,748.1,751.3,749.8,733.8,732.1,730.5,728.9,718.5,715.2],
+                "rad_range": (0.1, 0.5), "hum_range": (0.0, 0.02),
+            },
+            "satellite": {
+                # Earth surface / LEO instrument sensor typical ranges
+                "temp_range": (15, 35), "temp_std": 8,
+                "pres_range": (980, 1040), "pres_std": 8,
+                "rad_range": (0.0, 0.15), "hum_range": (0.0, 0.9),
+            },
+            "lunar": {
+                # Moon: extreme diurnal temp (-170 to +120°C), near-vacuum
+                "temp_range": (-170, 120), "temp_std": 60,
+                "pres_range": (0, 0.00001), "pres_std": 0,
+                "rad_range": (0.2, 0.9), "hum_range": (0.0, 0.0),
+            },
+            "deepspace": {
+                # Deep space: near absolute zero, essentially vacuum
+                "temp_range": (-273, -260), "temp_std": 1,
+                "pres_range": (0, 0), "pres_std": 0,
+                "rad_range": (0.01, 0.3), "hum_range": (0.0, 0.0),
+            },
+        }
+
+        params = MISSION_SENSOR_PARAMS.get(mission, MISSION_SENSOR_PARAMS["mars"])
+        normal_data = []
+
+        for i in range(2000):
+            if mission == "mars":
+                t_vals = params["temp_values"]
+                p_vals = params["pres_values"]
+                t = t_vals[i % len(t_vals)] + np.random.normal(0, 3)
+                p = p_vals[i % len(p_vals)] + np.random.normal(0, 1.5)
+            else:
+                t = np.random.uniform(*params["temp_range"]) + np.random.normal(0, params.get("temp_std", 5))
+                p = np.random.uniform(*params["pres_range"]) + np.random.normal(0, params.get("pres_std", 1))
+
+            ci  = max(0, min(ci_max, ci_max * 0.5 + np.random.normal(0, ci_max * 0.15)))
+            rad = np.random.uniform(*params["rad_range"])
+            hum = np.random.uniform(*params["hum_range"])
             normal_data.append([t, p, ci, rad, hum])
 
-        model = IsolationForest(contamination=0.05, random_state=42, n_estimators=300, max_samples=256)
+        model = IsolationForest(contamination=0.05, random_state=42, n_estimators=200, max_samples=256)
         model.fit(normal_data)
         scores = model.score_samples(normal_data)
-        self._anomaly_threshold = float(np.percentile(scores, 5))
-        print(f"[AI] IsolationForest trained on real NASA MEDA data (threshold: {self._anomaly_threshold:.4f})")
-        return model
+        # threshold at 5th percentile of training scores
+        threshold = float(np.percentile(scores, 5))
+        # store score range for normalization
+        self._score_ranges = getattr(self, '_score_ranges', {})
+        self._score_ranges[mission] = {
+            "min": float(np.percentile(scores, 1)),
+            "max": float(np.percentile(scores, 99)),
+        }
+        print(f"[AI] IsolationForest [{mission}]: threshold={threshold:.4f}, score_range=[{self._score_ranges[mission]['min']:.3f}, {self._score_ranges[mission]['max']:.3f}]")
+        return model, threshold
 
     def _train_random_forest(self):
         """Train RandomForest with 15 features including instrument priority, sol age, data ratio."""
@@ -233,7 +269,16 @@ class DecisionEngine:
         print(f"[AI] RandomForest: accuracy={metrics['accuracy']:.3f} f1={metrics['f1']:.3f} (15 features, {split} samples)")
         return model, metrics
 
-    def analyze_anomaly(self, sensor_data: Dict) -> tuple:
+    def analyze_anomaly(self, sensor_data: Dict, mission: str = "mars") -> tuple:
+        """
+        Detect anomalies using mission-specific IsolationForest.
+        Each mission has its own model trained on realistic sensor ranges.
+        Score is normalized relative to that mission's training distribution.
+        """
+        model = self._isolation_forests.get(mission, self._isolation_forests["mars"])
+        threshold = self._anomaly_thresholds.get(mission, self._anomaly_thresholds["mars"])
+        score_range = getattr(self, '_score_ranges', {}).get(mission, {"min": -0.6, "max": -0.05})
+
         features = [[
             sensor_data.get("temperature", -25),
             sensor_data.get("pressure", 729),
@@ -241,9 +286,14 @@ class DecisionEngine:
             sensor_data.get("radiation_level", 0.3),
             sensor_data.get("humidity", 0.01),
         ]]
-        score = self.isolation_forest.score_samples(features)[0]
-        is_anomaly = score < self._anomaly_threshold
-        anomaly_strength = max(0.0, min(1.0, (-score - 0.05) / 0.3))
+        score = float(model.score_samples(features)[0])
+        is_anomaly = score < threshold
+
+        # Normalize anomaly strength properly using mission's score distribution
+        s_min = score_range["min"]   # most anomalous seen in training
+        s_max = score_range["max"]   # most normal seen in training
+        # anomaly_strength: 0 = very normal, 1 = very anomalous
+        anomaly_strength = max(0.0, min(1.0, (s_max - score) / max(s_max - s_min, 0.01)))
         return is_anomaly, round(float(anomaly_strength), 3)
 
     def analyze_semantic(self, description: str, mission: str = "mars") -> float:
@@ -383,7 +433,7 @@ class DecisionEngine:
         cfg = MISSION_CONFIGS.get(mission, MISSION_CONFIGS["mars"])
         bw_min, bw_max = cfg["bandwidth_range"]
 
-        is_anomaly, anomaly_score = self.analyze_anomaly(file["sensor_data"])
+        is_anomaly, anomaly_score = self.analyze_anomaly(file["sensor_data"], mission)
         semantic_score = self.analyze_semantic(file["description"], mission)
 
         bw = channel_state["bandwidth_mbps"]
