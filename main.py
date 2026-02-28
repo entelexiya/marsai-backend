@@ -311,3 +311,80 @@ async def analyze_pdf(
     result["semantic_score"] = semantic_score
 
     return result
+
+
+@app.get("/metrics")
+def get_metrics():
+    """Model performance metrics for dashboard."""
+    if engine is None:
+        return {"error": "Models loading"}
+    return engine.get_metrics()
+
+
+@app.get("/nasa_image")
+def get_nasa_image(query: str = "Mars Perseverance rover", mission: str = "mars"):
+    """
+    Fetch a real NASA image via NASA Image API and analyze with CLIP.
+    Returns image URL + CLIP scientific value score.
+    """
+    import requests as req
+
+    NASA_QUERIES = {
+        "mars": ["Mars Perseverance rover surface", "Mars methane biosignature", "Mars rock formation"],
+        "satellite": ["Earth flood satellite", "wildfire satellite image", "deforestation satellite"],
+        "lunar": ["Moon lunar surface crater", "lunar south pole ice", "Moon artemis"],
+        "deepspace": ["deep space nebula plasma", "cosmic ray space", "interstellar medium"],
+    }
+
+    search_query = query or NASA_QUERIES.get(mission, ["Mars"])[0]
+
+    try:
+        resp = req.get(
+            "https://images-api.nasa.gov/search",
+            params={"q": search_query, "media_type": "image", "page_size": 5},
+            timeout=10,
+        )
+        data = resp.json()
+        items = data.get("collection", {}).get("items", [])
+        if not items:
+            return {"error": "No NASA images found", "query": search_query}
+
+        item = items[0]
+        image_url = None
+        for link in item.get("links", []):
+            if link.get("rel") == "preview":
+                image_url = link.get("href")
+                break
+
+        if not image_url:
+            return {"error": "No preview image available"}
+
+        title = item.get("data", [{}])[0].get("title", "NASA Image")
+        description = item.get("data", [{}])[0].get("description", "")[:300]
+        nasa_id = item.get("data", [{}])[0].get("nasa_id", "")
+        date_created = item.get("data", [{}])[0].get("date_created", "")[:10]
+
+        # Run CLIP analysis
+        clip_score = 0.5
+        if engine and engine.clip_model:
+            clip_score = engine.analyze_image_clip(image_url=image_url, mission=mission)
+
+        # Also run semantic on description
+        semantic_score = 0.5
+        if engine and description:
+            semantic_score = engine.analyze_semantic(description, mission)
+
+        return {
+            "image_url": image_url,
+            "title": title,
+            "description": description,
+            "nasa_id": nasa_id,
+            "date_created": date_created,
+            "clip_score": clip_score,
+            "semantic_score": semantic_score,
+            "query": search_query,
+            "clip_active": engine.clip_model is not None if engine else False,
+        }
+
+    except Exception as e:
+        return {"error": str(e), "query": search_query}
