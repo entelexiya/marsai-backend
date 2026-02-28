@@ -30,7 +30,7 @@ FastAPI backend with 5 ML models for onboard science selection.
 2. **Sentence Transformer (MiniLM)** — semantic value of file descriptions  
 3. **LinearRegression** — channel bandwidth prediction
 4. **RandomForest** — final send/queue/drop decision (trained on 8000 samples)
-5.**CLIP Vision** — Image analysis 
+5. **CLIP Vision** — Image analysis 
 
 
 
