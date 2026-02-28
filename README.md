@@ -8,16 +8,9 @@ pinned: false
 ---
 # MarsAI Backend
 
-FastAPI backend with 4 ML models for onboard science selection.
+FastAPI backend with 5 ML models for onboard science selection.
 
-## Local Setup
-
-```bash
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
-
-API runs on http://localhost:8000
+## https://marsai-six.vercel.app/
 
 ## API Endpoints
 
@@ -37,9 +30,9 @@ API runs on http://localhost:8000
 2. **Sentence Transformer (MiniLM)** — semantic value of file descriptions  
 3. **LinearRegression** — channel bandwidth prediction
 4. **RandomForest** — final send/queue/drop decision (trained on 8000 samples)
+5.**CLIP Vision** — Image analysis 
 
-## Deploy to Railway
 
-1. Push to GitHub
-2. railway.app → New Project → Deploy from GitHub
-3. Done — Railway auto-detects Python and installs dependencies
+
+
+
