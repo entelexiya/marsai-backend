@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 import threading
 import random
+import io
 
 from channel_simulator import ChannelSimulator
 from satellite_files import generate_file, generate_batch
@@ -246,3 +247,67 @@ def channel_history():
 @app.get("/missions")
 def get_missions():
     return {"missions": list(MISSION_CONFIGS.keys()), "current": current_mission}
+
+
+@app.post("/analyze_pdf")
+async def analyze_pdf(
+    file: UploadFile = File(...),
+    mission: str = Form(default="mars")
+):
+    """
+    Upload a PDF file — extract text, run Sentence Transformer,
+    return scientific value score and AI decision.
+    """
+    if engine is None:
+        return {"error": "Models still loading, please wait"}
+
+    # Read PDF bytes
+    pdf_bytes = await file.read()
+    
+    # Extract text from PDF
+    text = ""
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        pages_text = []
+        for page in reader.pages:
+            pages_text.append(page.extract_text() or "")
+        text = " ".join(pages_text)
+        # Limit to first 2000 chars for speed
+        text = text[:2000].strip()
+    except Exception as e:
+        return {"error": f"PDF parsing failed: {str(e)}. Make sure it is a valid PDF."}
+
+    if not text or len(text) < 20:
+        return {"error": "Could not extract text from PDF. Try a text-based PDF (not scanned image)."}
+
+    # Run semantic analysis
+    semantic_score = engine.analyze_semantic(text, mission)
+
+    # Determine file size estimate from bytes
+    size_mb = round(len(pdf_bytes) / (1024 * 1024), 2)
+
+    # Build file object for full AI pipeline
+    pdf_file = {
+        "id": "pdf_upload",
+        "name": file.filename or "uploaded.pdf",
+        "type": "PDF",
+        "size_mb": max(size_mb, 0.1),
+        "description": text[:500],
+        "mission": mission,
+        "sensor_data": {
+            "temperature": -25.0,
+            "pressure": 729.0,
+            "chemical_index": min(1.0, semantic_score * 0.8),
+            "radiation_level": 0.3,
+            "humidity": 0.01,
+        },
+    }
+
+    result = engine.decide(pdf_file, channel.get_state())
+    result["extracted_text_preview"] = text[:300]
+    result["text_length"] = len(text)
+    result["filename"] = file.filename
+    result["semantic_score"] = semantic_score
+
+    return result
