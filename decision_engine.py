@@ -523,6 +523,25 @@ class DecisionEngine:
         label = {"critical": "SEND NOW", "sending": "SEND", "queued": "QUEUE", "pending": "WAIT"}.get(status, "WAIT")
         reasons.append(f"🎯 RandomForest (15 feat) → {label} ({max(rf_proba):.0%})")
 
+        # Feature contributions — actual values that went into the model
+        # Shows jury exactly what the model "sees" for this specific file
+        feature_contributions = {
+            "🌡️ Sensor Anomaly":    round(float(anomaly_score), 3),
+            "🧠 Semantic Value":    round(float(semantic_score), 3),
+            "👁️ CLIP Vision":       round(float(clip_score), 3),
+            "📡 Channel Quality":   round(float(bw_norm), 3),
+            "🔬 Instrument Priority": round(float(instrument_priority), 3),
+            "📦 File Size Pressure":  round(float(min(size / 500, 1.0)), 3),
+            "🕐 Data Freshness":    round(float(sol_age_norm), 3),
+            "⚡ Packet Loss":       round(float(1.0 - min(loss / 40, 1.0)), 3),
+        }
+
+        # Global feature importance from trained RF (stable, model-level)
+        top_features = sorted(
+            self.rf_metrics["feature_importance"].items(),
+            key=lambda x: x[1], reverse=True
+        )[:6]
+
         result = {
             "status": status,
             "priority": int(priority),
@@ -538,6 +557,8 @@ class DecisionEngine:
             "rf_confidence": float(round(float(max(rf_proba)), 3)),
             "mission": mission,
             "clip_active": self.clip_model is not None,
+            "feature_contributions": feature_contributions,
+            "rf_feature_importance": dict(top_features),
         }
 
         # Log for metrics
